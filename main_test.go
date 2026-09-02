@@ -164,6 +164,18 @@ func TestParseConfigSelectsInteractiveMode(t *testing.T) {
 	}
 }
 
+func TestParseConfigRejectsNativeClientExecution(t *testing.T) {
+	for _, args := range [][]string{
+		{"codex", "--native"},
+		{"claude", "--passthrough"},
+		{"opencode", "--real"},
+	} {
+		if _, err := ParseConfig(args); err == nil || !strings.Contains(err.Error(), "不调用模型") {
+			t.Fatalf("ParseConfig(%#v) error = %v, want native execution rejection", args, err)
+		}
+	}
+}
+
 func TestCodexCardContainsRealCLIFields(t *testing.T) {
 	card := strings.Join(codexCard("loading", "loading", 80), "\n")
 	for _, want := range []string{

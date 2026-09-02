@@ -170,6 +170,10 @@ func ParseConfig(args []string) (Config, error) {
 	fs.BoolVar(&cfg.JSON, "json", false, "每行输出一个 JSON 事件")
 	fs.BoolVar(&cfg.NoColor, "no-color", false, "关闭终端颜色（当前为兼容选项）")
 	fs.BoolVar(&cfg.NoAltScreen, "no-alt-screen", false, "在当前终端滚动区显示 TUI")
+	var native bool
+	fs.BoolVar(&native, "native", false, "已禁用：模拟模式禁止启动原生客户端")
+	fs.BoolVar(&native, "passthrough", false, "--native 的别名（已禁用）")
+	fs.BoolVar(&native, "real", false, "--native 的别名（已禁用）")
 	fs.BoolVar(&cfg.Once, "once", false, "只运行一轮")
 	var promptFlag string
 	fs.StringVar(&promptFlag, "prompt", "", "任务描述（也可直接作为位置参数传入）")
@@ -267,6 +271,9 @@ func ParseConfig(args []string) (Config, error) {
 	}
 	if cfg.Prompt != "" && cfg.Iterations == 0 && !iterationsFlagSet {
 		cfg.Iterations = 1
+	}
+	if native {
+		return cfg, errors.New("原生客户端透传已禁用：程序必须保证不调用模型且不修改本地文件，请使用纯模拟模式")
 	}
 	// With no task or machine-readable mode, behave like the interactive CLI.
 	cfg.Interactive = cfg.Prompt == "" && !cfg.JSON && cfg.Iterations == 0
