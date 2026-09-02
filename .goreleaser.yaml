@@ -1,0 +1,71 @@
+version: 2
+
+project_name: fake-vibecoding
+
+builds:
+  - id: fake-vibecoding
+    main: .
+    binary: fake-vibecoding
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    ids: [fake-vibecoding]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: '{{ incpatch .Version }}-snapshot'
+
+release:
+  name_template: 'fake-vibecoding {{ .Tag }}'
+  header: |
+    ## fake-vibecoding {{ .Tag }}
+
+    独立的 Codex / Claude / OpenCode 风格 TUI 模拟器。
+
+brews:
+  - name: fake-vibecoding
+    ids: [default]
+    repository:
+      owner: techblack
+      name: homebrew-tap
+      token: '{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}'
+    directory: Formula
+    homepage: 'https://github.com/techblack/fake-vibecoding'
+    description: 'Read-only TUI simulator for Codex, Claude Code and OpenCode workflows'
+    license: MIT
+    url_template: 'https://github.com/techblack/fake-vibecoding/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
+    commit_author:
+      name: github-actions[bot]
+      email: github-actions[bot]@users.noreply.github.com
+    install: |
+      bin.install "fake-vibecoding"
+    test: |
+      assert_match "fake-vibecoding", shell_output("#{bin}/fake-vibecoding --version")
+
+changelog:
+  filters:
+    exclude:
+      - '^Merge pull request'
+      - '^Merge branch'
