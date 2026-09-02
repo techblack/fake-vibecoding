@@ -677,6 +677,7 @@ type codexTUI struct {
 	activeAt  int
 	active    string
 	activeArg string
+	openMode  string
 	width     int
 	height    int
 	escape    byte
@@ -879,6 +880,9 @@ func (t *codexTUI) renderOther(loading bool) error {
 	if t.cfg.Agent == AgentOpenCode && strings.HasPrefix(strings.TrimSpace(string(t.input)), "/") {
 		lines = append(lines, "  Commands", "  /help   /clear   /model   /sessions   /exit")
 	}
+	if t.cfg.Agent == AgentOpenCode && strings.Contains(string(t.input), "@") {
+		lines = append(lines, "  Files", "  "+fileSuggestions(string(t.input), t.snippets))
+	}
 	lines = append(lines, base[historyAt:]...)
 	placeholder := string(t.input)
 	inputEmpty := placeholder == ""
@@ -899,6 +903,8 @@ func (t *codexTUI) renderOther(loading bool) error {
 			lines[index] = promptPrefix + placeholder
 		case t.cfg.Agent == AgentOpenCode && strings.HasPrefix(line, "   ┃  Ask anything"):
 			lines[index] = promptPrefix + placeholder
+		case t.cfg.Agent == AgentOpenCode && strings.Contains(line, "Build · GPT OpenAI"):
+			lines[index] = "   ┃  " + openCodeMode(t.openMode) + " · GPT OpenAI"
 		}
 	}
 	promptStart := len(lines) - 4
@@ -914,8 +920,11 @@ func (t *codexTUI) renderOther(loading bool) error {
 		lines = lines[dropped:]
 	}
 	var frame strings.Builder
-	frame.WriteString("\033[?2026h\033[H\033[2J")
+	frame.WriteString("\033[?2026h\033[H\033[2J\033[48;2;10;10;10m\033[38;2;255;255;255m")
 	for index, line := range lines {
+		if t.cfg.Agent == AgentOpenCode && displayWidth(line) < t.width {
+			line += strings.Repeat(" ", t.width-displayWidth(line))
+		}
 		line = t.styleOtherLine(line, index+dropped, cardLen)
 		frame.WriteString(line)
 		frame.WriteString("\r\n")
@@ -928,7 +937,7 @@ func (t *codexTUI) renderOther(loading bool) error {
 	if inputEmpty {
 		column = displayWidth(promptPrefix) + 1
 	}
-	fmt.Fprintf(&frame, "\033[%d;%dH\033[?2026l", promptRow+1, column)
+	fmt.Fprintf(&frame, "\033[0m\033[%d;%dH\033[?2026l", promptRow+1, column)
 	_, err := io.WriteString(t.out, frame.String())
 	return err
 }
@@ -938,12 +947,19 @@ func otherBase(agent Agent, model, directory string, width int) ([]string, int) 
 		model = claudeModel(model)
 		card := claudeCard(model, directory, width)
 		tail := []string{
-			"",
+			"⚠ 1 MCP server needs authentication · run /mcp",
 			strings.Repeat("─", maxInt(width, 1)),
 			"❯ ",
 			strings.Repeat("─", maxInt(width, 1)),
 			"  ⏵⏵  don't ask on (shift+tab to cycle) · ← for agents",
-			"  ◉ xhigh · /effort",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"[OMC#4.14.7] | Model: Opus | session:0m | ctx:0%",
 		}
 		return append(card, tail...), len(card)
 	}
@@ -982,6 +998,25 @@ func claudeModel(model string) string {
 		return "opus"
 	}
 	return model
+}
+
+func openCodeMode(mode string) string {
+	if mode == "" {
+		return "Build"
+	}
+	return mode
+}
+
+func fileSuggestions(input string, snippets []Snippet) string {
+	if len(snippets) == 0 {
+		return "No matching files"
+	}
+	for _, snippet := range snippets {
+		if strings.Contains(strings.ToLower(snippet.Path), strings.ToLower(strings.TrimPrefix(strings.TrimSpace(input[strings.LastIndex(input, "@")+1:]), "@"))) {
+			return "@" + snippet.Path
+		}
+	}
+	return "@" + snippets[0].Path
 }
 
 func claudeCard(model, directory string, width int) []string {
@@ -1082,6 +1117,7 @@ func (t *codexTUI) styleClaudeLine(line string, index, cardLen int) string {
 		gray      = "\033[38;5;246m"
 		separator = "\033[38;5;244m"
 		pink      = "\033[38;5;211m"
+		yellow    = "\033[38;5;220m"
 		dim       = "\033[2m"
 		bold      = "\033[1m"
 		reset     = "\033[0m"
@@ -1104,10 +1140,16 @@ func (t *codexTUI) styleClaudeLine(line string, index, cardLen int) string {
 	if strings.HasPrefix(line, "  ◉") {
 		return gray + line + reset
 	}
+	if strings.HasPrefix(line, "⚠") {
+		return yellow + "⚠" + reset + gray + line[len("⚠"):] + reset
+	}
 	if strings.Contains(line, "esc to interrupt") {
 		return dim + line + reset
 	}
 	if strings.HasPrefix(line, "  ?") || strings.HasPrefix(line, "■") {
+		return separator + line + reset
+	}
+	if strings.HasPrefix(line, "[OMC") || strings.Trim(line, "─") == "" {
 		return separator + line + reset
 	}
 	return line
@@ -1458,6 +1500,11 @@ func (t *codexTUI) handleKey(ctx context.Context, key rune) (*taskRun, error) {
 		case '3':
 			t.escape = 3
 			return nil, nil
+		case 'Z':
+			if t.cfg.Agent == AgentClaude {
+				t.history = append(t.history, "Permission mode: accept edits")
+				return nil, t.render(false)
+			}
 		default:
 			return nil, nil
 		}
@@ -1523,6 +1570,25 @@ func (t *codexTUI) handleKey(ctx context.Context, key rune) (*taskRun, error) {
 	case 12: // Ctrl-L
 		t.history = nil
 		return nil, t.render(false)
+	case 9: // Tab toggles OpenCode Build/Plan mode.
+		if t.cfg.Agent == AgentOpenCode {
+			if t.openMode == "Plan" {
+				t.openMode = "Build"
+			} else {
+				t.openMode = "Plan"
+			}
+			return nil, t.render(false)
+		}
+	case 16: // Ctrl-P opens the OpenCode command palette.
+		if t.cfg.Agent == AgentOpenCode {
+			t.history = append(t.history, "  Commands: /help  /clear  /model  /sessions  /exit")
+			return nil, t.render(false)
+		}
+	case 24: // Ctrl-X is OpenCode's leader key.
+		if t.cfg.Agent == AgentOpenCode {
+			t.history = append(t.history, "  Leader shortcuts: ctrl+x then p for commands, ctrl+x then a for agents")
+			return nil, t.render(false)
+		}
 	default:
 		if key >= 32 {
 			t.input = append(t.input, 0)
