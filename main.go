@@ -876,6 +876,9 @@ func (t *codexTUI) renderOther(loading bool) error {
 	if t.status != "" {
 		lines = append(lines, shortenDisplay(t.statusLine(), t.width))
 	}
+	if t.cfg.Agent == AgentOpenCode && strings.HasPrefix(strings.TrimSpace(string(t.input)), "/") {
+		lines = append(lines, "  Commands", "  /help   /clear   /model   /sessions   /exit")
+	}
 	lines = append(lines, base[historyAt:]...)
 	placeholder := string(t.input)
 	inputEmpty := placeholder == ""
@@ -1067,17 +1070,76 @@ func (t *codexTUI) styleOtherLine(line string, index, cardLen int) string {
 	if t.cfg.NoColor {
 		return line
 	}
-	const dim, reset, bold = "\033[2m", "\033[0m", "\033[1m"
+	if t.cfg.Agent == AgentClaude {
+		return t.styleClaudeLine(line, index, cardLen)
+	}
+	return t.styleOpenCodeLine(line, index, cardLen)
+}
+
+func (t *codexTUI) styleClaudeLine(line string, index, cardLen int) string {
+	const (
+		magenta   = "\033[38;5;174m"
+		gray      = "\033[38;5;246m"
+		separator = "\033[38;5;244m"
+		pink      = "\033[38;5;211m"
+		dim       = "\033[2m"
+		bold      = "\033[1m"
+		reset     = "\033[0m"
+	)
 	if index < cardLen {
-		return dim + line + reset
+		if index == 0 {
+			return magenta + line + reset
+		}
+		if index == 1 || index == 2 || index == 3 || index == 4 || index == 5 {
+			return gray + line + reset
+		}
+		return gray + line + reset
 	}
 	if strings.HasPrefix(line, "❯ ") {
-		return bold + "❯" + reset + line[len("❯"):]
+		return "\033[39m" + bold + "❯" + reset + dim + line[len("❯"):] + reset
+	}
+	if strings.HasPrefix(line, "  ⏵⏵") {
+		return pink + line[:len("  ⏵⏵")] + reset + gray + line[len("  ⏵⏵"):] + reset
+	}
+	if strings.HasPrefix(line, "  ◉") {
+		return gray + line + reset
+	}
+	if strings.Contains(line, "esc to interrupt") {
+		return dim + line + reset
+	}
+	if strings.HasPrefix(line, "  ?") || strings.HasPrefix(line, "■") {
+		return separator + line + reset
+	}
+	return line
+}
+
+func (t *codexTUI) styleOpenCodeLine(line string, index, cardLen int) string {
+	const (
+		blue       = "\033[38;2;92;156;245m"
+		white      = "\033[38;2;238;238;238m"
+		gray       = "\033[38;2;128;128;128m"
+		background = "\033[48;2;30;30;30m"
+		dim        = "\033[2m"
+		bold       = "\033[1m"
+		reset      = "\033[0m"
+	)
+	if index < cardLen {
+		return gray + line + reset
+	}
+	if strings.HasPrefix(line, "   ┃") {
+		line += strings.Repeat(" ", maxInt(t.width-displayWidth(line), 0))
+		return blue + "┃" + reset + background + white + line[len("   ┃"):] + reset
+	}
+	if strings.HasPrefix(line, "   ╹") {
+		return blue + line + reset
+	}
+	if strings.Contains(line, "tab agents") || strings.Contains(line, "/status") {
+		return gray + line + reset
 	}
 	if strings.HasPrefix(line, "› ") {
 		return bold + "›" + reset + line[len("›"):]
 	}
-	if strings.HasPrefix(line, "  ?") || strings.Contains(line, "ctrl+p") || strings.Contains(line, " · ") {
+	if strings.HasPrefix(line, "  ?") || strings.Contains(line, "ctrl+p") {
 		return dim + line + reset
 	}
 	return line
