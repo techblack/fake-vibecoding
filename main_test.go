@@ -84,6 +84,16 @@ func TestSimulatorUsesPromptAwareToolSequence(t *testing.T) {
 	}
 }
 
+func TestFakeDiffIsVirtualAndNeverWrites(t *testing.T) {
+	cfg := testConfig(t)
+	snippet := Snippet{Path: "main.go", Text: "package main\nfunc main() {}"}
+	sim := NewSimulator(cfg, []Snippet{snippet})
+	diff := sim.fakeDiff(&snippet)
+	if diff.Path != "main.go" || diff.Added != 1 || diff.Removed != 1 || !strings.Contains(diff.Hunk, "-package main") || !strings.Contains(diff.Hunk, "+package main // simulated") {
+		t.Fatalf("unexpected virtual diff: %#v", diff)
+	}
+}
+
 func TestInteractivePromptRunsUntilCancelled(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Iterations = 0
@@ -120,6 +130,10 @@ func TestParseConfigAgentAndPrompt(t *testing.T) {
 	}
 	if cfg.Agent != AgentClaude || cfg.Iterations != 2 || cfg.Prompt != "fix the bug" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	claudeSubagent, err := ParseConfig([]string{"claude", "--agent", "reviewer", "--once", "--interval", "0"})
+	if err != nil || claudeSubagent.Agent != AgentClaude {
+		t.Fatalf("Claude named agent changed presentation: cfg=%+v err=%v", claudeSubagent, err)
 	}
 }
 
@@ -159,6 +173,34 @@ func TestCodexCardContainsRealCLIFields(t *testing.T) {
 	} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("card does not contain %q: %s", want, card)
+		}
+	}
+}
+
+func TestOtherAgentLayoutsUseTerminalWidth(t *testing.T) {
+	for _, agent := range []Agent{AgentClaude, AgentOpenCode} {
+		lines, historyAt := otherBase(agent, "gpt-5.6-sol xhigh", "/tmp/project", 80)
+		if historyAt == 0 || len(lines) <= historyAt {
+			t.Fatalf("%s base has no transcript split: %d %#v", agent, historyAt, lines)
+		}
+		for i, line := range lines {
+			if displayWidth(line) > 80 {
+				t.Fatalf("%s line %d exceeds width: %d %q", agent, i, displayWidth(line), line)
+			}
+		}
+	}
+	claude, _ := otherBase(AgentClaude, "gpt-5.6-sol xhigh", "/tmp/project", 80)
+	claudeText := strings.Join(claude, "\n")
+	for _, want := range []string{"Claude Code v" + claudeVersion, "Welcome back!", "Tips for getting started", "❯ "} {
+		if !strings.Contains(claudeText, want) {
+			t.Fatalf("Claude TUI missing %q", want)
+		}
+	}
+	opencode, _ := otherBase(AgentOpenCode, "gpt-5.6-sol xhigh", "/tmp/project", 80)
+	opencodeText := strings.Join(opencode, "\n")
+	for _, want := range []string{"█▀▀█", "Ask anything...", "tab agents", openCodeVersion} {
+		if !strings.Contains(opencodeText, want) {
+			t.Fatalf("OpenCode TUI missing %q", want)
 		}
 	}
 }

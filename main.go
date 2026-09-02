@@ -92,7 +92,7 @@ type VirtualDiff struct {
 
 var toolCatalog = []string{
 	"read_file", "list_directory", "search", "inspect_symbols", "run_tests",
-	"apply_patch", "git_diff", "git_status", "view_file", "web_search",
+	"apply_patch", "git_diff", "git_status", "view_file", "web_search", "run_command",
 }
 
 var tasks = []string{
@@ -134,9 +134,13 @@ func ParseConfig(args []string) (Config, error) {
 		MaxFiles:     8,
 		Model:        "gpt-5.6-sol xhigh",
 	}
+	styleSet := false
+	styleAgent := cfg.Agent
 	if len(args) > 0 {
 		if a := Agent(strings.ToLower(args[0])); a.valid() {
 			cfg.Agent, args = a, args[1:]
+			styleAgent = a
+			styleSet = true
 		}
 	}
 	// Codex and OpenCode expose an explicit run/exec command; accepting it keeps
@@ -205,7 +209,13 @@ func ParseConfig(args []string) (Config, error) {
 	}
 	cfg.Agent = Agent(strings.ToLower(agent))
 	if !cfg.Agent.valid() {
-		return cfg, fmt.Errorf("未知 agent %q（可选 codex、claude、opencode）", agent)
+		if styleSet {
+			// Claude's --agent selects a named sub-agent; it does not change the
+			// outer Claude presentation.
+			cfg.Agent = styleAgent
+		} else {
+			cfg.Agent = AgentCodex
+		}
 	}
 	if cfg.Iterations < 0 {
 		return cfg, errors.New("iterations 不能小于 0")
@@ -410,6 +420,9 @@ func (s *Simulator) Run(ctx context.Context, emit func(Event) error) error {
 		sequence := s.toolSequence(task)
 		for _, name := range sequence {
 			input := "."
+			if name == "run_command" && strings.HasPrefix(strings.TrimSpace(task), "!") {
+				input = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(task), "!"))
+			}
 			var snippet *Snippet
 			if len(s.snippets) > 0 && (name == "read_file" || name == "inspect_symbols" || name == "apply_patch") {
 				snippet = s.chooseSnippet(task)
@@ -487,6 +500,9 @@ func (s *Simulator) chooseSnippet(prompt string) *Snippet {
 }
 
 func (s *Simulator) toolSequence(prompt string) []string {
+	if strings.HasPrefix(strings.TrimSpace(prompt), "!") {
+		return []string{"run_command"}
+	}
 	if isChangeRequest(prompt) {
 		pool := readOnlyTools()
 		count := 3 + s.rng.Intn(4)
@@ -559,6 +575,15 @@ func (r renderer) interactiveHeader(cfg Config) error {
 		}
 		_, err := fmt.Fprintf(r.out, "  Tip: New Build faster with Codex.\n\n› Ask Codex to do anything\n\n  ? for shortcuts\n  %s · %s\n", cfg.Model, displayDirectory(cfg.Workdir))
 		return err
+	}
+	if r.agent == AgentClaude || r.agent == AgentOpenCode {
+		lines, _ := otherBase(r.agent, cfg.Model, displayDirectory(cfg.Workdir), 80)
+		for _, line := range lines {
+			if _, err := fmt.Fprintln(r.out, line); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	label := map[Agent]string{AgentCodex: "Codex", AgentClaude: "Claude Code", AgentOpenCode: "OpenCode"}[r.agent]
 	_, err := fmt.Fprintf(r.out, "╭────────────────────────────────────────────────────────────╮\n│ fake-vibecoding · %-40s │\n│ 工作目录: %-47s │\n│ 这是只读模拟环境，不会修改文件。                         │\n╰────────────────────────────────────────────────────────────╯\n\n", label, shortenPath(cfg.Workdir, 47))
@@ -673,10 +698,12 @@ func runCodexTUI(ctx context.Context, cfg Config, snippets []Snippet, out io.Wri
 	defer term.Restore(int(os.Stdin.Fd()), state)
 
 	// Codex first paints a loading card, then replaces it with model and directory.
-	if err := tui.render(true); err != nil {
-		return err
+	if cfg.Agent == AgentCodex {
+		if err := tui.render(true); err != nil {
+			return err
+		}
+		time.Sleep(80 * time.Millisecond)
 	}
-	time.Sleep(80 * time.Millisecond)
 	if err := tui.render(false); err != nil {
 		return err
 	}
@@ -837,40 +864,46 @@ func (t *codexTUI) renderOther(loading bool) error {
 	if t.height < 5 {
 		t.height = 5
 	}
-	model, directory := t.cfg.Model, displayDirectory(t.cfg.Workdir)
 	if loading {
-		model, directory = "loading", "loading"
+		loading = false
 	}
-	card := otherCard(t.cfg.Agent, model, directory, t.width)
-	cardLen := len(card)
-	lines := append([]string(nil), card...)
+	base, historyAt := otherBase(t.cfg.Agent, t.cfg.Model, displayDirectory(t.cfg.Workdir), t.width)
+	cardLen := historyAt
+	lines := append([]string(nil), base[:historyAt]...)
 	for _, item := range t.history {
 		lines = append(lines, wrapTranscriptLine(item, t.width)...)
 	}
 	if t.status != "" {
 		lines = append(lines, shortenDisplay(t.statusLine(), t.width))
 	}
+	lines = append(lines, base[historyAt:]...)
 	placeholder := string(t.input)
 	inputEmpty := placeholder == ""
 	if inputEmpty {
-		if t.cfg.Agent == AgentClaude {
-			placeholder = "What would you like to do?"
-		} else {
-			placeholder = "Ask anything..."
+		if t.cfg.Agent != AgentClaude {
+			placeholder = "Ask anything... \"What is the tech stack of this project?\""
 		}
 	}
-	lines = append(lines, "")
 	promptPrefix := "› "
 	if t.cfg.Agent == AgentClaude {
 		promptPrefix = "❯ "
-	}
-	promptStart := len(lines)
-	lines = append(lines, wrapWithPrefixes(promptPrefix, placeholder, "  ", t.width)...)
-	lines = append(lines, "")
-	if t.cfg.Agent == AgentClaude {
-		lines = append(lines, "  ? for shortcuts", "  "+t.cfg.Model+" · "+displayDirectory(t.cfg.Workdir))
 	} else {
-		lines = append(lines, "  tab agents     ctrl+p commands", "  "+displayDirectory(t.cfg.Workdir)+" · "+t.cfg.Model)
+		promptPrefix = "   ┃  "
+	}
+	for index, line := range lines {
+		switch {
+		case t.cfg.Agent == AgentClaude && strings.HasPrefix(line, "❯ "):
+			lines[index] = promptPrefix + placeholder
+		case t.cfg.Agent == AgentOpenCode && strings.HasPrefix(line, "   ┃  Ask anything"):
+			lines[index] = promptPrefix + placeholder
+		}
+	}
+	promptStart := len(lines) - 4
+	for index, line := range lines {
+		if strings.HasPrefix(line, promptPrefix) {
+			promptStart = index
+			break
+		}
 	}
 	dropped := 0
 	if len(lines) > t.height {
@@ -890,11 +923,111 @@ func (t *codexTUI) renderOther(loading bool) error {
 		promptRow = 0
 	}
 	if inputEmpty {
-		column = len([]rune(promptPrefix)) + 1
+		column = displayWidth(promptPrefix) + 1
 	}
 	fmt.Fprintf(&frame, "\033[%d;%dH\033[?2026l", promptRow+1, column)
 	_, err := io.WriteString(t.out, frame.String())
 	return err
+}
+
+func otherBase(agent Agent, model, directory string, width int) ([]string, int) {
+	if agent == AgentClaude {
+		model = claudeModel(model)
+		card := claudeCard(model, directory, width)
+		tail := []string{
+			"",
+			strings.Repeat("─", maxInt(width, 1)),
+			"❯ ",
+			strings.Repeat("─", maxInt(width, 1)),
+			"  ⏵⏵  don't ask on (shift+tab to cycle) · ← for agents",
+			"  ◉ xhigh · /effort",
+		}
+		return append(card, tail...), len(card)
+	}
+	logo := []string{
+		"", "", "", "", "",
+		centerLine("⠀                                ▄", width),
+		centerLine("█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█", width),
+		centerLine("█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀", width),
+		centerLine("▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀", width),
+		"", "",
+	}
+	shortcut := " tab agents     ctrl+p commands"
+	horizontal := maxInt(width-4, 1)
+	tail := []string{
+		"   ┃",
+		"   ┃  Ask anything... \"What is the tech stack of this project?\"",
+		"   ┃",
+		"   ┃  Build · GPT OpenAI",
+		"   ╹" + strings.Repeat("━", horizontal),
+		strings.Repeat(" ", maxInt(width-displayWidth(shortcut), 0)) + shortcut,
+		"", "", "", "",
+		openCodeStatusLine(directory, width),
+		"  main",
+	}
+	return append(logo, tail...), len(logo)
+}
+
+func openCodeStatusLine(directory string, width int) string {
+	right := "  " + openCodeVersion
+	left := shortenDisplay("  "+directory+":main    ⊙ 0 MCP    /status", maxInt(width-displayWidth(right), 1))
+	return left + strings.Repeat(" ", maxInt(width-displayWidth(left)-displayWidth(right), 0)) + right
+}
+
+func claudeModel(model string) string {
+	if strings.HasPrefix(strings.ToLower(model), "gpt-") || model == "" {
+		return "opus"
+	}
+	return model
+}
+
+func claudeCard(model, directory string, width int) []string {
+	inner := maxInt(width, 40)
+	if inner > 80 {
+		inner = 80
+	}
+	leftWidth, rightWidth := 51, inner-54
+	if rightWidth < 12 {
+		rightWidth = 12
+		leftWidth = inner - rightWidth - 4
+	}
+	row := func(left, right string) string {
+		left = shortenDisplay(left, leftWidth)
+		right = shortenDisplay(right, rightWidth)
+		return "│" + left + strings.Repeat(" ", leftWidth-displayWidth(left)) + "│" + right + strings.Repeat(" ", rightWidth-displayWidth(right)) + "│"
+	}
+	top := "╭─── Claude Code v" + claudeVersion + " "
+	top = shortenDisplay(top, inner-2)
+	top = "╭" + strings.TrimPrefix(top, "╭") + strings.Repeat("─", inner-displayWidth(top)-1) + "╮"
+	return []string{
+		top,
+		row("", "Tips for getting started"),
+		row("                   Welcome back!", "Run /init to create a CLAUDE.md file"),
+		row("", "────────────────────────"),
+		row("                       ▐▛███▜▌", "What's new"),
+		row("                      ▝▜█████▛▘", "Check the Claude Code changelog"),
+		row("                         ▘▘  ▝▝", ""),
+		row("", ""),
+		row("    "+model+" with xhigh effort · API Usage Billing", ""),
+		row("   "+directory, ""),
+		"╰" + strings.Repeat("─", inner-2) + "╯",
+	}
+}
+
+func centerLine(line string, width int) string {
+	line = shortenDisplay(line, width)
+	left := (width - displayWidth(line)) / 2
+	if left < 0 {
+		left = 0
+	}
+	return strings.Repeat(" ", left) + line
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func composerCursorAt(promptStart int, prefix, text string, width int) (int, int) {
@@ -1413,6 +1546,11 @@ func (t *codexTUI) otherEvent(e Event) error {
 		case "diff":
 			if e.Diff != nil {
 				t.history = append(t.history, "⎿  Proposed changes (not applied)")
+				for _, line := range strings.Split(e.Diff.Hunk, "\n") {
+					if line != "" {
+						t.history = append(t.history, "     "+line)
+					}
+				}
 			}
 		case "error":
 			t.history = append(t.history, "⎿  ⚠ "+e.Detail)
@@ -1432,6 +1570,11 @@ func (t *codexTUI) otherEvent(e Event) error {
 		case "diff":
 			if e.Diff != nil {
 				t.history = append(t.history, "  └ "+e.Diff.Path+" (+"+fmt.Sprint(e.Diff.Added)+" -"+fmt.Sprint(e.Diff.Removed)+")")
+				for _, line := range strings.Split(e.Diff.Hunk, "\n") {
+					if line != "" {
+						t.history = append(t.history, "     "+line)
+					}
+				}
 			}
 		case "error":
 			t.history = append(t.history, "! "+e.Detail)
@@ -1527,6 +1670,11 @@ func (t *codexTUI) toolDetail(e Event) string {
 		return "Open " + e.Input
 	case "web_search":
 		return "Search web for " + searchTerm(t.cfg.Prompt)
+	case "run_command":
+		if e.Input != "" && e.Input != "." {
+			return e.Input
+		}
+		return "echo simulated"
 	default:
 		return e.Name
 	}
@@ -1544,6 +1692,8 @@ func toolVerb(name string) string {
 		return "Opened file"
 	case "web_search":
 		return "Searched the web"
+	case "run_command":
+		return "Ran command"
 	default:
 		return "Exploring"
 	}

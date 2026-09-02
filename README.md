@@ -24,8 +24,10 @@ go run . opencode --json --seed 42 --error-rate 0.3 --retries 2
 输入一条任务后会持续、无限地模拟探索、读取、编辑、测试以及偶发的模型重试，不会自行
 结束。按 `Esc` 或 `Ctrl-C` 中断当前任务后，可以输入下一条；空闲时输入 `/exit` 退出。
 
-`claude` 和 `opencode` 也支持真实终端中的 raw TUI，并分别使用 `❯`、`›` 输入提示、
-对应版本卡片和工具 transcript。三种 agent 都支持 `--workdir` / `-C` 指定只读目录。
+`claude` 和 `opencode` 也支持真实终端中的 raw TUI：Claude Code `2.1.198` 使用
+欢迎卡片、Tips 分栏、`❯` 输入线和权限底栏；OpenCode `1.15.12` 使用居中 logo、
+多行 composer、`tab agents`/`ctrl+p commands` 快捷键栏和状态栏。两者均使用各自的
+工具 transcript。三种 agent 都支持 `--workdir` / `-C` 指定只读目录。
 
 Codex TUI 在真实终端中使用 raw 键盘输入和 alternate screen；使用 `--no-alt-screen`
 可保留滚动历史。方向键、退格、Ctrl-C/Ctrl-D 和 Enter 均可用。
