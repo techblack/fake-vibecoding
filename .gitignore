@@ -1,0 +1,5 @@
+/fake-vibecoding
+/dist/
+/.builds/
+/.goreleaser.yaml.tmp
+*.log
