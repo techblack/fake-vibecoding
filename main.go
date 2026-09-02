@@ -21,7 +21,7 @@ import (
 	"golang.org/x/term"
 )
 
-const version = "0.1.0"
+const version = "0.0.1"
 const codexVersion = "0.152.1"
 const claudeVersion = "2.1.198"
 const openCodeVersion = "1.15.12"
